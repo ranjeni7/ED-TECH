@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 ##from sentence_transformers import SentenceTransformer
-import faiss
+#import faiss
 import requests
 from typing import List, Tuple
 from io import StringIO
