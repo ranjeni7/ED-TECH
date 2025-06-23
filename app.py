@@ -5,8 +5,6 @@ import requests
 import time
 from typing import List, Tuple
 from io import StringIO
-
-# Use sklearn cosine similarity instead of FAISS
 from sklearn.metrics.pairwise import cosine_similarity
 
 # Safe import for sentence-transformers
@@ -95,8 +93,13 @@ Enhanced Answer:"""
 
 def main():
     st.markdown('<h1 class="main-header">🤖 Codebasics RAG+LLM Assistant</h1>', unsafe_allow_html=True)
+
     if 'assistant' not in st.session_state:
         st.session_state.assistant = RAGAssistant()
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "user_input" not in st.session_state:
+        st.session_state.user_input = ""
 
     with st.sidebar:
         st.markdown('<div class="sidebar-info">', unsafe_allow_html=True)
@@ -106,19 +109,36 @@ def main():
         st.metric("Total FAQ Entries", len(st.session_state.assistant.faq_data))
         st.markdown('</div>', unsafe_allow_html=True)
 
+        st.markdown("### 🚀 Quick Questions")
+        quick_questions = [
+            "Can I take this without programming experience?",
+            "What are the course prerequisites?",
+            "How long is the bootcamp?",
+            "Is there job assistance?"
+        ]
+        for i, q in enumerate(quick_questions):
+            if st.button(f"✨ {q}", key=f"quick_q_{i}"):
+                st.session_state.user_input = q
+                st.rerun()
+
+        if st.button("🧹 Clear Chat", type="secondary"):
+            st.session_state.messages = []
+            st.session_state.user_input = ""
+            st.rerun()
+
     col1, col2 = st.columns([2, 1])
     with col1:
         st.markdown("### 💬 Chat with Assistant")
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
-        user_question = st.text_input("Ask about our bootcamp:", key="user_input")
+        user_question = st.text_input("Ask about our bootcamp:", key="main_input", value=st.session_state.user_input)
         if st.button("🚀 Get Answer", type="primary") and user_question:
+            st.session_state.user_input = user_question
             st.session_state.messages.append({"role": "user", "content": user_question})
             with st.spinner("🔍 Searching knowledge base..."):
                 similar = st.session_state.assistant.search_similar_questions(user_question, top_k)
             with st.spinner("🧠 Enhancing with AI..." if hf_api_key else "📖 Preparing answer..."):
                 reply = st.session_state.assistant.generate_response(user_question, similar, hf_api_key if hf_api_key else None)
             st.session_state.messages.append({"role": "assistant", "content": reply, "similar_questions": similar})
+
         for msg in st.session_state.messages:
             if msg["role"] == "user":
                 st.markdown(f'<div class="chat-message user-message"><strong>You:</strong> {msg["content"]}</div>', unsafe_allow_html=True)
@@ -128,17 +148,6 @@ def main():
                     with st.expander("📚 Source Questions"):
                         for i, (_, score, question, _) in enumerate(msg["similar_questions"], 1):
                             st.markdown(f"**{i}.** {question}  \n_Relevance: {score:.2f}_")
-
-    with col2:
-        st.markdown("### 🚀 Quick Questions")
-        for q in ["Can I take this without programming experience?", "What are the course prerequisites?",
-                  "How long is the bootcamp?", "Is there job assistance?"]:
-            if st.button(f"✨ {q}"):
-                st.session_state.user_input = q
-                st.rerun()
-        if st.button("🧹 Clear Chat", type="secondary"):
-            st.session_state.messages = []
-            st.rerun()
 
 if __name__ == "__main__":
     main()
