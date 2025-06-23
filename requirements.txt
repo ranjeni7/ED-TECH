@@ -1,6 +1,4 @@
 streamlit
 pandas
-numpy
-requests
-scikit-learn
+faiss-cpu
 sentence-transformers
