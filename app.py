@@ -1,57 +1,53 @@
 import streamlit as st
 import pandas as pd
-import faiss
-from sentence_transformers import SentenceTransformer
-import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
-# Load model
-@st.cache_resource
-def load_model():
-    return SentenceTransformer('all-MiniLM-L6-v2')
+# Title
+st.set_page_config(page_title="FAQ Assistant", layout="wide")
+st.title("💬 Codebasics FAQ Assistant")
 
-# Load CSV data
+# Load and cache data
 @st.cache_data
 def load_data():
-    df = pd.read_csv("codebasics_faqs.csv")
-    return df[['prompt', 'response']]
+    return pd.read_csv("codebasics_faqs.csv", encoding="utf-8", errors="ignore")
 
-# Build FAISS index
-@st.cache_resource
-def build_faiss_index(df, model):
-    embeddings = model.encode(df['prompt'].tolist())
-    dim = embeddings.shape[1]
-    index = faiss.IndexFlatL2(dim)
-    index.add(np.array(embeddings))
-    return index, embeddings
-
-# Search function
-def get_answer(query, df, model, index, top_k=1):
-    query_vec = model.encode([query])
-    distances, indices = index.search(np.array(query_vec), top_k)
-    result = df.iloc[indices[0][0]]
-    return result['response']
-
-# App UI
-st.set_page_config(page_title="RAG FAQ Assistant", layout="wide")
-st.title("🤖 RAG FAQ Assistant")
-st.markdown("Ask a question related to the uploaded FAQ!")
-
-model = load_model()
 df = load_data()
-index, _ = build_faiss_index(df, model)
 
-# Sidebar - Quick Questions
-st.sidebar.title("💡 Quick Questions")
-for i, row in df.head(5).iterrows():
-    if st.sidebar.button(row['prompt']):
-        st.session_state['quick_query'] = row['prompt']
+# Display CSV
+if st.checkbox("Show FAQ Dataset"):
+    st.dataframe(df)
 
-# Main Input
-query = st.text_input("📩 Ask your question:", value=st.session_state.get('quick_query', ''))
-if query:
-    with st.spinner("Thinking..."):
-        answer = get_answer(query, df, model, index)
-        st.success(answer)
+# Preprocess data
+@st.cache_data
+def create_vectorizer_and_matrix(questions):
+    vectorizer = TfidfVectorizer(stop_words='english')
+    question_vectors = vectorizer.fit_transform(questions)
+    return vectorizer, question_vectors
 
-# Clear session state for sidebar
-st.session_state['quick_query'] = ''
+vectorizer, question_vectors = create_vectorizer_and_matrix(df['Question'])
+
+# Query box
+user_query = st.text_input("Ask your question here 👇")
+
+# Process query
+def get_best_answer(query):
+    query_vec = vectorizer.transform([query])
+    similarity_scores = cosine_similarity(query_vec, question_vectors)
+    best_match_index = similarity_scores.argmax()
+    best_question = df.iloc[best_match_index]["Question"]
+    best_answer = df.iloc[best_match_index]["Answer"]
+    score = similarity_scores[0][best_match_index]
+    return best_question, best_answer, score
+
+# Result
+if user_query:
+    best_q, best_a, sim_score = get_best_answer(user_query)
+    if sim_score > 0.2:
+        st.success("✅ Best Matched FAQ:")
+        st.markdown(f"**Q: {best_q}**")
+        st.markdown(f"**A:** {best_a}")
+        st.caption(f"Match Confidence: {sim_score:.2f}")
+    else:
+        st.error("❌ No relevant answer found. Please try rephrasing your question.")
+
