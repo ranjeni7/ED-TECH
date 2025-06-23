@@ -1,279 +1,158 @@
-import os
-import pandas as pd
 import streamlit as st
-from langchain_community.document_loaders import WebBaseLoader
-from langchain_community.vectorstores import FAISS
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from dotenv import load_dotenv
-from langchain.docstore.document import Document
+import pandas as pd
+import numpy as np
+import requests
+import time
+from typing import List, Tuple
+from io import StringIO
 
-# Configure Streamlit page first to prevent any rendering issues
-st.set_page_config(
-    page_title="CodeBasics AI Assistant",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# Use sklearn cosine similarity instead of FAISS
+from sklearn.metrics.pairwise import cosine_similarity
 
-# Initialize session state safely
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# Custom CSS with error-proof styling
-def inject_custom_css():
-    st.markdown("""
-    <style>
-        .main {
-            background-color: #f8f9fa;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        .stTextInput input {
-            border-radius: 20px;
-            padding: 12px 15px;
-            border: 1px solid #ced4da;
-        }
-        .stButton button {
-            width: 100%;
-            border-radius: 20px;
-            padding: 12px 15px;
-            background-color: #4CAF50;
-            color: white;
-            font-weight: bold;
-            border: none;
-            transition: all 0.3s;
-        }
-        .stButton button:hover {
-            background-color: #45a049;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-        }
-        .chat-message-user {
-            background-color: #e3f2fd;
-            padding: 12px 16px;
-            border-radius: 15px;
-            margin: 8px 0;
-            max-width: 80%;
-            margin-left: auto;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .chat-message-assistant {
-            background-color: #f1f1f1;
-            padding: 12px 16px;
-            border-radius: 15px;
-            margin: 8px 0;
-            max-width: 80%;
-            margin-right: auto;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .stAlert {
-            border-radius: 10px;
-        }
-        .stSpinner > div {
-            border-color: #4CAF50 transparent transparent transparent !important;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-inject_custom_css()
-
-# Safe environment variable loading
+# Safe import for sentence-transformers
 try:
-    load_dotenv()
-except Exception as e:
-    st.warning(f"Couldn't load .env file: {e}")
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    st.error("Please install sentence-transformers via `pip install sentence-transformers`")
+    st.stop()
 
-# Safe FAQ data loading
-def load_faq_data(faq_path="codebasics_faqs.csv"):
-    """Safely load FAQ data from CSV"""
-    try:
-        if not os.path.exists(faq_path):
-            return []
-            
-        df = pd.read_csv(faq_path)
-        if 'prompt' not in df.columns or 'response' not in df.columns:
-            st.error("FAQ CSV must contain 'prompt' and 'response' columns")
-            return []
-            
-        documents = []
-        for _, row in df.iterrows():
-            content = f"Question: {row['prompt']}\nAnswer: {row['response']}"
-            metadata = {"source": "codebasics_faq", "type": "faq"}
-            documents.append(Document(page_content=content, metadata=metadata))
-        return documents
-    except Exception as e:
-        st.error(f"Error loading FAQ data: {str(e)}")
-        return []
+# Custom CSS
+st.set_page_config(page_title="Codebasics RAG Assistant", page_icon="🤖", layout="wide")
+st.markdown("""
+<style>
+    .main-header { font-size: 2.5rem; font-weight: bold; color: #1f77b4; text-align: center; }
+    .chat-message { padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid #1f77b4; }
+    .user-message { background-color: #f0f2f6; border-left-color: #ff6b6b; }
+    .assistant-message { background-color: #e8f4f8; border-left-color: #1f77b4; }
+    .ai-tag { font-size: 0.8rem; color: #4CAF50; font-style: italic; }
+    .warning { color: #ff9800; font-style: italic; }
+    .sidebar-info { background-color: #f0f2f6; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; }
+    .quick-question { 
+        display: block;
+        padding: 0.5rem;
+        margin: 0.5rem 0;
+        border-radius: 0.5rem;
+        background-color: #f0f2f6;
+        cursor: pointer;
+        transition: background-color 0.3s;
+    }
+    .quick-question:hover {
+        background-color: #e0e2e6;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# Robust vectorstore creation with multiple fallbacks
-@st.cache_resource(show_spinner="Building knowledge base...")
-def create_vectorstore(_urls, _faq_path):
-    """Safely create vector store with comprehensive error handling"""
-    all_docs = []
-    
-    # Load web content with retry logic
-    if _urls:
-        for url in _urls:
-            try:
-                if url.strip():  # Skip empty URLs
-                    loader = WebBaseLoader(url.strip())
-                    web_docs = loader.load()
-                    all_docs.extend(web_docs)
-            except Exception as e:
-                st.warning(f"Couldn't load URL {url}: {str(e)}")
-                continue
-    
-    # Load FAQ data
-    try:
-        faq_docs = load_faq_data(_faq_path)
-        all_docs.extend(faq_docs)
-    except Exception as e:
-        st.warning(f"Couldn't load FAQ data: {str(e)}")
-    
-    if not all_docs:
-        st.error("No documents available to create knowledge base")
-        return None
-    
-    # Document splitting with safety checks
-    try:
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            length_function=len
+class RAGAssistant:
+    def __init__(self):
+        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.faq_data = self.load_faq_data()
+        self.embeddings = self.model.encode(
+            ["Question: " + q + " Answer: " + a for q, a in zip(self.faq_data.prompt, self.faq_data.response)]
         )
-        splits = text_splitter.split_documents(all_docs)
-        
-        if not splits:
-            st.error("Document splitting resulted in empty chunks")
-            return None
-            
-        return FAISS.from_documents(
-            documents=splits,
-            embedding=OpenAIEmbeddings()
-        )
-    except Exception as e:
-        st.error(f"Error creating vector store: {str(e)}")
-        return None
 
-# Sidebar with validation
-with st.sidebar:
-    st.title("⚙️ Configuration")
-    
-    # API key input with validation
-    api_key = st.text_input(
-        "OpenAI API Key",
-        type="password",
-        value=os.getenv("OPENAI_API_KEY", ""),
-        help="Required for AI functionality"
-    )
-    
-    # URL input with parsing safeguards
-    url_input = st.text_area(
-        "CodeBasics Website URLs (one per line)",
-        value="https://codebasics.io/\nhttps://codebasics.io/data-analyst-bootcamp",
-        help="Websites to include in knowledge base"
-    )
-    urls = [url.strip() for url in url_input.split("\n") if url.strip()]
-    
-    # Model selection with default fallback
-    model_name = st.selectbox(
-        "AI Model",
-        ["gpt-3.5-turbo", "gpt-4"],
-        index=0
-    )
-    
-    st.markdown("---")
-    st.markdown("""
-    <div style="text-align: center;">
-        <small>Powered by LangChain & OpenAI</small>
-    </div>
-    """, unsafe_allow_html=True)
+    def load_faq_data(self):
+        faq_text = """prompt,response
+I have never done programming in my life. Can I take this bootcamp?,"Yes, this is the perfect bootcamp for beginners..."
+Why should I trust Codebasics?,"Till now 9000 + learners have benefitted..."
+Is there any prerequisite for taking this bootcamp?,"Our bootcamp is specifically designed for beginners..."
+What datasets are used in this bootcamp?,"The datasets mimic real business problems..."
+I'm not sure if this bootcamp is good enough. What can I do?,"We got you covered. Watch our YouTube videos first..."
+How can I contact the instructors?,"Join our Discord community for support..."
+What if I don't like this bootcamp?,"We offer a 100% refund as per policy..."
+Does this bootcamp have lifetime access?,"Yes"
+What is the duration of this bootcamp?,"Complete in 3 months with 2-3 hours/day..."
+Can I attend this bootcamp while working full time?,"Yes. This bootcamp is self-paced..."
+"""
+        return pd.read_csv(StringIO(faq_text))
 
-# Main app interface
-st.title("🤖 CodeBasics AI Assistant")
-st.caption("Ask me anything about CodeBasics courses and resources")
+    def search_similar_questions(self, query: str, top_k: int = 3):
+        query_embedding = self.model.encode([query])
+        sims = cosine_similarity(query_embedding, self.embeddings)[0]
+        top_indices = sims.argsort()[::-1][:top_k]
+        return [(i, sims[i], self.faq_data.prompt[i], self.faq_data.response[i]) for i in top_indices if sims[i] > 0.3]
 
-# Initialize vectorstore safely
-vectorstore = None
-try:
-    vectorstore = create_vectorstore(urls, "codebasics_faqs.csv")
-except Exception as e:
-    st.error(f"Initialization error: {str(e)}")
-
-# Display chat history
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-# Chat input with comprehensive validation
-if prompt := st.chat_input("Ask your question..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    
-    with st.chat_message("user"):
-        st.markdown(prompt)
-    
-    with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        full_response = ""
-        
+    def generate_llm_response(self, prompt: str, api_key: str):
+        API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-large"
+        headers = {"Authorization": f"Bearer {api_key}"}
         try:
-            # Validate prerequisites
-            if not api_key:
-                raise ValueError("Please enter your OpenAI API key in the sidebar")
-            
-            if not vectorstore:
-                raise ValueError("Knowledge base not ready. Check configuration.")
-            
-            # Set API key for current session
-            os.environ["OPENAI_API_KEY"] = api_key
-            
-            # Create retriever with safe defaults
-            retriever = vectorstore.as_retriever(
-                search_type="similarity",
-                search_kwargs={"k": 3}
-            )
-            
-            # Prepare the prompt template with context guidance
-            template = """You are an expert assistant for CodeBasics educational platform. 
-            Answer the question based only on the following context:
+            response = requests.post(API_URL, headers=headers, json={"inputs": prompt}, timeout=20)
+            if response.status_code == 503:
+                wait_time = response.json().get('estimated_time', 30)
+                time.sleep(wait_time)
+                response = requests.post(API_URL, headers=headers, json={"inputs": prompt}, timeout=20)
+            if response.status_code == 200:
+                return response.json()[0]['generated_text']
+            return None
+        except Exception:
+            return None
 
-            Context:
-            {context}
+    def generate_response(self, user_question: str, similar_questions: List[Tuple], api_key: str = None):
+        if not similar_questions:
+            return "I couldn't find relevant information. Please contact support."
+        best_answer = similar_questions[0][3]
+        if not api_key:
+            return best_answer
+        context = "\n".join([f"Question: {q}\nAnswer: {a}" for _, _, q, a in similar_questions])
+        prompt = f"""Improve this answer for the question below using the provided context.
 
-            Question: {question}
+Original Question: {user_question}
+Context:
+{context}
 
-            Provide a detailed, accurate answer. If unsure, say you don't know.
-            Format your response clearly with proper paragraphs and bullet points when helpful:"""
-            
-            prompt_template = ChatPromptTemplate.from_template(template)
-            
-            # Initialize LLM with timeout
-            llm = ChatOpenAI(
-                model_name=model_name,
-                temperature=0.3,
-                request_timeout=30
-            )
-            
-            # Create RAG chain with error handling
-            chain = (
-                {"context": retriever, "question": RunnablePassthrough()}
-                | prompt_template
-                | llm
-                | StrOutputParser()
-            )
-            
-            # Stream response with progress indicator
-            for chunk in chain.stream(prompt):
-                full_response += chunk
-                message_placeholder.markdown(full_response + "▌")
-            
-            message_placeholder.markdown(full_response)
-            
-        except Exception as e:
-            full_response = f"⚠️ Sorry, I encountered an error processing your request. Please try again. \n\n(Technical details: {str(e)})"
-            message_placeholder.error(full_response)
+Enhanced Answer:"""
+        llm_response = self.generate_llm_response(prompt, api_key)
+        if llm_response:
+            return f"{llm_response}\n\n<small class='ai-tag'>AI-enhanced answer</small>"
+        return f"{best_answer}\n\n<small class='warning'>Original answer (AI service unavailable)</small>"
+
+def main():
+    st.markdown('<h1 class="main-header">🤖 Codebasics RAG+LLM Assistant</h1>', unsafe_allow_html=True)
+    if 'assistant' not in st.session_state:
+        st.session_state.assistant = RAGAssistant()
+
+    with st.sidebar:
+        st.markdown('<div class="sidebar-info">', unsafe_allow_html=True)
+        st.markdown("### ⚙️ Configuration")
+        hf_api_key = st.text_input("🔑 HuggingFace API Key (optional)", type="password")
+        top_k = st.slider("Number of similar questions", 1, 5, 3)
+        st.metric("Total FAQ Entries", len(st.session_state.assistant.faq_data))
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.markdown("### 💬 Chat with Assistant")
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+        user_question = st.text_input("Ask about our bootcamp:", key="user_input")
+        if st.button("🚀 Get Answer", type="primary") and user_question:
+            st.session_state.messages.append({"role": "user", "content": user_question})
+            with st.spinner("🔍 Searching knowledge base..."):
+                similar = st.session_state.assistant.search_similar_questions(user_question, top_k)
+            with st.spinner("🧠 Enhancing with AI..." if hf_api_key else "📖 Preparing answer..."):
+                reply = st.session_state.assistant.generate_response(user_question, similar, hf_api_key if hf_api_key else None)
+            st.session_state.messages.append({"role": "assistant", "content": reply, "similar_questions": similar})
+        for msg in st.session_state.messages:
+            if msg["role"] == "user":
+                st.markdown(f'<div class="chat-message user-message"><strong>You:</strong> {msg["content"]}</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="chat-message assistant-message">{msg["content"]}</div>', unsafe_allow_html=True)
+                if "similar_questions" in msg:
+                    with st.expander("📚 Source Questions"):
+                        for i, (_, score, question, _) in enumerate(msg["similar_questions"], 1):
+                            st.markdown(f"**{i}.** {question}  \n_Relevance: {score:.2f}_")
+
+    with col2:
+        st.markdown("### 🚀 Quick Questions")
+        st.markdown("""
+            <div class="quick-question" onclick="document.getElementById('user_input').value='Can I take this without programming experience?'">✨ Can I take this without programming experience?</div>
+            <div class="quick-question" onclick="document.getElementById('user_input').value='What are the course prerequisites?'">✨ What are the course prerequisites?</div>
+            <div class="quick-question" onclick="document.getElementById('user_input').value='How long is the bootcamp?'">✨ How long is the bootcamp?</div>
+            <div class="quick-question" onclick="document.getElementById('user_input').value='Is there job assistance?'">✨ Is there job assistance?</div>
+        """, unsafe_allow_html=True)
         
-        st.session_state.messages.append({"role": "assistant", "content": full_response})
+        if st.button("🧹 Clear Chat", type="secondary"):
+            st.session_state.messages = []
+            st.rerun()
+
+if __name__ == "__main__":
+    main()
