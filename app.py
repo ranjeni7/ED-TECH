@@ -142,7 +142,7 @@ def main():
                             st.markdown(f"**{i}.** {question}  \n_Relevance: {score:.2f}_")
 
     with col2:
-        st.markdown("### 🚀 Quick Questions")
+        st.markdown("### 🚀 Common Questions")
         st.markdown("""
             <div class="quick-question" onclick="document.getElementById('user_input').value='Can I take this without programming experience?'">✨ Can I take this without programming experience?</div>
             <div class="quick-question" onclick="document.getElementById('user_input').value='What are the course prerequisites?'">✨ What are the course prerequisites?</div>
