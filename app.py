@@ -32,7 +32,7 @@ st.markdown("""
         padding: 0.5rem;
         margin: 0.5rem 0;
         border-radius: 0.5rem;
-        background-color: #f0f2f6;
+        background-color: #ffffff;
         cursor: pointer;
         transition: background-color 0.3s;
     }
@@ -156,3 +156,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
