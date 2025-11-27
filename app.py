@@ -22,8 +22,8 @@ st.markdown("""
 <style>
     .main-header { font-size: 2.5rem; font-weight: bold; color: #1f77b4; text-align: center; }
     .chat-message { padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid #1f77b4; }
-    .user-message { background-color: #f0f2f6; border-left-color: #ff6b6b; }
-    .assistant-message { background-color: #e8f4f8; border-left-color: #1f77b4; }
+    .user-message { background-color: black; border-left-color: #ff6b6b; }
+    .assistant-message { background-color: black; border-left-color: #1f77b4; }
     .ai-tag { font-size: 0.8rem; color: #4CAF50; font-style: italic; }
     .warning { color: #ff9800; font-style: italic; }
     .sidebar-info { background-color: #f0f2f6; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; }
@@ -156,5 +156,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
